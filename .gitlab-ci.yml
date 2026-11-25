@@ -1,0 +1,6 @@
+stages:
+  - test
+
+include:
+  - local: /ci/demo-app.yml
+  - local: /ci/runner-smoke.yml

@@ -1,7 +1,7 @@
 unit-test:
   stage: test
   tags:
-    - shell
+    - network-lab
   variables:
     PYTHONDONTWRITEBYTECODE: "1"
   script:

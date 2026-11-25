@@ -2,7 +2,7 @@ test-docker:
   stage: test
   image: alpine:latest
   tags:
-    - docker
+    - homelab
   when: manual
   allow_failure: true
   script:
@@ -12,7 +12,7 @@ test-docker:
 test-shell:
   stage: test
   tags:
-    - shell
+    - network-lab
   when: manual
   allow_failure: true
   script:

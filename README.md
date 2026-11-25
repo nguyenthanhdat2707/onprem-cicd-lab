@@ -2,7 +2,8 @@
 
 Repo này chứa automation Ansible cho lab Proxmox/Kubernetes, tài liệu đồ án
 DevSecOps và mã nguồn demo app. Cluster hai node đã được ghi nhận nghiệm thu;
-pipeline hiện mới có unit test và hai job kiểm tra runner chạy thủ công; còn
+pipeline hiện có unit test, secret scan (manual khi GitLab còn HTTP) và hai job
+kiểm tra runner chạy thủ công; còn
 registry, GitOps và security controls đang ở mức kế hoạch.
 
 Tài liệu bắt đầu tại [mục lục docs](docs/README.md),

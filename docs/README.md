@@ -13,6 +13,7 @@
 - [Kế hoạch cluster](infrastructure/K8S_CLUSTER_PLAN.md) và [kiểm kê tài nguyên](infrastructure/RESOURCE_AUDIT_2026-11-23.md).
 - [Trạng thái Stage 0](infrastructure/STAGE0_STATUS_2026-11-25.md) và [phương án GitLab HTTPS/registry](infrastructure/GITLAB_TLS_REGISTRY_PLAN.md).
 - [Flow video demo](demo/VIDEO_DEMO_FLOW.md).
+- [Trạng thái CI Stage 1](supply-chain/CI_STAGE1.md).
 
 Các số đo trong tài liệu hạ tầng là ảnh chụp theo ngày, không thay thế kiểm tra
 trực tiếp trước khi thay đổi lab.

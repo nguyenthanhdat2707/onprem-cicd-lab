@@ -1,0 +1,16 @@
+# Generated report workspace and local build output
+.archify/
+**/__pycache__/
+*.py[cod]
+.venv/
+*.retry
+*.log
+
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+kubeconfig
+admin.conf

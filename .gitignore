@@ -5,6 +5,7 @@
 .venv/
 *.retry
 *.log
+reports/
 
 # Local credentials and configuration
 .env

@@ -1,0 +1,25 @@
+build-scan-sbom-publish:
+  stage: image
+  tags:
+    - network-lab
+  variables:
+    PYTHON_BASE_IMAGE: "docker.io/library/python:3.12.16-slim-bookworm@sha256:44cf1793efa7c7a476bb0f2cff81443f4a072c90c1cb127e2924933daa3e8c64"
+    TRIVY_IMAGE: "ghcr.io/aquasecurity/trivy:0.76.2"
+    SYFT_IMAGE: "ghcr.io/anchore/syft:v1.57.2"
+  rules:
+    - if: '$CI_SERVER_PROTOCOL == "https" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      variables:
+        PUBLISH_IMAGE: "true"
+    - if: '$CI_SERVER_PROTOCOL == "https" && $CI_COMMIT_BRANCH'
+      when: manual
+      allow_failure: true
+      variables:
+        PUBLISH_IMAGE: "false"
+    - when: never
+  script:
+    - bash ci/build-image.sh
+  artifacts:
+    when: always
+    paths:
+      - reports/
+    expire_in: 7 days

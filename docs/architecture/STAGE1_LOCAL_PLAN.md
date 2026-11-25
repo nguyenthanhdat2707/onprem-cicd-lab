@@ -38,8 +38,9 @@ part of the app.
 5. Check node-to-registry pull over trusted TLS. Deploy only by digest after
    Stage 1 gates pass; test frontend `/` and both `/healthz` endpoints.
 
-The root `.gitlab-ci.yml` includes `ci/demo-app.yml` for the unit test and
-`ci/runner-smoke.yml` for optional manual executor checks. Builder, registry
+The root `.gitlab-ci.yml` includes `ci/demo-app.yml` for the unit test,
+`ci/secret-scan.yml` for the source secret gate and `ci/runner-smoke.yml`
+for optional manual executor checks. Builder, registry
 URL and Kubernetes manifests depend on live
 runner/registry checks. Do not assume Docker-in-Docker or privileged mode.
 GitOps, signing and admission belong to later stages in `PROJECT_SPEC.md`.

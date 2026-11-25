@@ -1,0 +1,24 @@
+---
+- name: Check the route to each VM before SSH
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Inspect route to this VM from the Ansible machine
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - route
+          - get
+          - "{{ ansible_host }}"
+      delegate_to: localhost
+      register: vm_route
+      changed_when: false
+
+    - name: Require the intended next hop
+      ansible.builtin.assert:
+        that:
+          - "vm_route.stdout is search(' via ' ~ lab_next_hop ~ ' ')"
+        fail_msg: >-
+          Route to {{ ansible_host }} does not use {{ lab_next_hop }}.
+          Current route: {{ vm_route.stdout }}

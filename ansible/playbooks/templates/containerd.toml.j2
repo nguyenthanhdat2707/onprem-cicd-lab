@@ -1,0 +1,6 @@
+# Managed by Ansible for kubeadm nodes. Keep CRI enabled for Kubernetes.
+version = 3
+disabled_plugins = []
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+  SystemdCgroup = true

@@ -1,0 +1,14 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    apiServerEndpoint: {{ cluster_api_address }}:6443
+    token: {{ cluster_join_command.stdout.split()[cluster_join_command.stdout.split().index('--token') + 1] }}
+    caCertHashes:
+      - {{ cluster_join_command.stdout.split()[cluster_join_command.stdout.split().index('--discovery-token-ca-cert-hash') + 1] }}
+nodeRegistration:
+  name: k8s-worker
+  criSocket: {{ cluster_cri_socket }}
+  kubeletExtraArgs:
+    - name: node-ip
+      value: {{ ansible_host }}

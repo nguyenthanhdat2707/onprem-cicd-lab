@@ -1,0 +1,123 @@
+---
+- name: Check route to the worker before joining it
+  import_playbook: preflight.yml
+
+- name: Join the worker with a short lived bootstrap token
+  hosts: workers
+  become: true
+  gather_facts: true
+
+  vars_prompt:
+    - name: worker_sudo_password
+      prompt: Sudo password for the worker user
+      private: true
+    - name: controller_sudo_password
+      prompt: Sudo password for the controller user
+      private: true
+
+  vars:
+    ansible_become_password: "{{ worker_sudo_password }}"
+
+  tasks:
+    - name: Require the intended worker
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'k8s-worker'
+          - ansible_host == '10.20.0.12'
+          - ansible_facts.hostname == 'k8s-worker'
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_version == '24.04'
+
+    - name: Check whether the worker has already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: worker_kubelet_conf
+
+    - name: Check for a partial worker bootstrap
+      ansible.builtin.stat:
+        path: /etc/kubernetes/bootstrap-kubelet.conf
+      register: worker_bootstrap_conf
+
+    - name: Refuse a partial worker bootstrap
+      ansible.builtin.assert:
+        that:
+          - worker_kubelet_conf.stat.exists or not worker_bootstrap_conf.stat.exists
+        fail_msg: Bootstrap kubeconfig exists without kubelet.conf; inspect before retrying join.
+
+    - name: Require the controller API before joining
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig=/etc/kubernetes/admin.conf, get, --raw=/readyz]
+      delegate_to: k8s-controller
+      vars:
+        ansible_become_password: "{{ controller_sudo_password }}"
+      register: join_api_ready
+      changed_when: false
+
+    - name: Require API ready
+      ansible.builtin.assert:
+        that:
+          - join_api_ready.stdout | trim == 'ok'
+
+    - name: Create a one hour worker join command on the controller
+      ansible.builtin.command:
+        argv: [kubeadm, token, create, --ttl, 1h, --print-join-command]
+      delegate_to: k8s-controller
+      vars:
+        ansible_become_password: "{{ controller_sudo_password }}"
+      register: cluster_join_command
+      no_log: true
+      when: not worker_kubelet_conf.stat.exists
+      changed_when: true
+
+    - name: Validate the join command has a token and CA hash
+      ansible.builtin.assert:
+        that:
+          - "'--token' in cluster_join_command.stdout.split()"
+          - "'--discovery-token-ca-cert-hash' in cluster_join_command.stdout.split()"
+      no_log: true
+      when: not worker_kubelet_conf.stat.exists
+
+    - name: Join the worker and remove the temporary secret file
+      when: not worker_kubelet_conf.stat.exists
+      block:
+        - name: Render a root only join configuration
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/templates/kubeadm-join.yaml.j2"
+            dest: /etc/kubernetes/kubeadm-join.yaml
+            owner: root
+            group: root
+            mode: '0600'
+          no_log: true
+
+        - name: Validate the join configuration
+          ansible.builtin.command:
+            argv: [kubeadm, config, validate, --config, /etc/kubernetes/kubeadm-join.yaml]
+          changed_when: false
+          no_log: true
+
+        - name: Join Kubernetes using the pinned node IP and CRI socket
+          ansible.builtin.command:
+            argv: [kubeadm, join, --config, /etc/kubernetes/kubeadm-join.yaml]
+          no_log: true
+          changed_when: true
+
+      always:
+        - name: Remove the temporary join configuration
+          ansible.builtin.file:
+            path: /etc/kubernetes/kubeadm-join.yaml
+            state: absent
+          no_log: true
+
+    - name: Wait for the worker to become Ready
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig=/etc/kubernetes/admin.conf
+          - wait
+          - --for=condition=Ready
+          - node/k8s-worker
+          - --timeout=10m
+      delegate_to: k8s-controller
+      vars:
+        ansible_become_password: "{{ controller_sudo_password }}"
+      changed_when: false

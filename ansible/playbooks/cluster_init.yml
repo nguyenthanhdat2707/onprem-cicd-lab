@@ -1,0 +1,98 @@
+---
+- name: Check route to the controller before bootstrap
+  import_playbook: preflight.yml
+
+- name: Initialize the single Kubernetes control plane
+  hosts: controllers
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Require the intended controller
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'k8s-controller'
+          - ansible_host == cluster_api_address
+          - ansible_facts.hostname == 'k8s-controller'
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_version == '24.04'
+
+    - name: Detect existing control plane configuration
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: cluster_admin_conf
+
+    - name: Detect partial bootstrap manifests
+      ansible.builtin.find:
+        paths: /etc/kubernetes/manifests
+        file_type: file
+      register: cluster_existing_manifests
+
+    - name: Stop on partial bootstrap state
+      ansible.builtin.assert:
+        that:
+          - cluster_admin_conf.stat.exists or cluster_existing_manifests.matched == 0
+        fail_msg: Static pod manifests exist without admin.conf; inspect before retrying kubeadm.
+
+    - name: Check free root space
+      ansible.builtin.command:
+        argv: [df, -B1, --output=avail, /]
+      register: cluster_init_disk
+      changed_when: false
+
+    - name: Require at least 5 GiB for control plane images
+      ansible.builtin.assert:
+        that:
+          - cluster_init_disk.stdout_lines[-1] | int >= 5368709120
+
+    - name: Render the reviewed kubeadm configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/kubeadm-init.yaml.j2"
+        dest: /etc/kubernetes/kubeadm-init.yaml
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+
+    - name: Validate kubeadm configuration before changing the cluster
+      ansible.builtin.command:
+        argv: [kubeadm, config, validate, --config, /etc/kubernetes/kubeadm-init.yaml]
+      changed_when: false
+
+    - name: Initialize the control plane without printing a bootstrap token
+      ansible.builtin.command:
+        argv: [kubeadm, init, --config, /etc/kubernetes/kubeadm-init.yaml, --skip-token-print]
+        creates: /etc/kubernetes/admin.conf
+      register: cluster_init_result
+
+    - name: Ensure the controller user has a private kubeconfig directory
+      ansible.builtin.file:
+        path: /home/k8s-controller/.kube
+        state: directory
+        owner: k8s-controller
+        group: k8s-controller
+        mode: '0700'
+
+    - name: Copy the admin kubeconfig for the controller user
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/k8s-controller/.kube/config
+        remote_src: true
+        owner: k8s-controller
+        group: k8s-controller
+        mode: '0600'
+      no_log: true
+
+    - name: Verify the API server responds
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig=/etc/kubernetes/admin.conf, get, --raw=/readyz]
+      register: cluster_api_ready
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: cluster_api_ready.rc == 0
+
+    - name: Require a healthy API response
+      ansible.builtin.assert:
+        that:
+          - cluster_api_ready.stdout | trim == 'ok'

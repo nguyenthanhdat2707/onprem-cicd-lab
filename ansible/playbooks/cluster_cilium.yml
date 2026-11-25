@@ -1,0 +1,131 @@
+---
+- name: Check route to the controller before CNI installation
+  import_playbook: preflight.yml
+
+- name: Install the pinned Cilium CNI on the new cluster
+  hosts: controllers
+  become: true
+  gather_facts: true
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    - name: Require the intended controller and architecture
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'k8s-controller'
+          - ansible_host == cluster_api_address
+          - ansible_facts.architecture == 'x86_64'
+
+    - name: Require a bootstrapped API server
+      ansible.builtin.command:
+        argv: [kubectl, get, --raw=/readyz]
+      register: cilium_api_ready
+      changed_when: false
+
+    - name: Require API ready
+      ansible.builtin.assert:
+        that:
+          - cilium_api_ready.stdout | trim == 'ok'
+
+    - name: Create a versioned Helm extraction directory
+      ansible.builtin.file:
+        path: "/opt/helm-{{ cluster_helm_version }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Download Helm with a pinned checksum
+      ansible.builtin.get_url:
+        url: "https://get.helm.sh/helm-v{{ cluster_helm_version }}-linux-amd64.tar.gz"
+        dest: "/opt/helm-{{ cluster_helm_version }}/helm.tar.gz"
+        checksum: "sha256:{{ cluster_helm_amd64_sha256 }}"
+        mode: '0644'
+
+    - name: Extract the pinned Helm binary
+      ansible.builtin.unarchive:
+        src: "/opt/helm-{{ cluster_helm_version }}/helm.tar.gz"
+        dest: "/opt/helm-{{ cluster_helm_version }}"
+        remote_src: true
+        creates: "/opt/helm-{{ cluster_helm_version }}/linux-amd64/helm"
+
+    - name: Link the pinned Helm client
+      ansible.builtin.file:
+        src: "/opt/helm-{{ cluster_helm_version }}/linux-amd64/helm"
+        dest: /usr/local/bin/helm
+        state: link
+
+    - name: Confirm Helm version
+      ansible.builtin.command:
+        argv: [helm, version, --short]
+      register: cluster_helm_version_actual
+      changed_when: false
+
+    - name: Require the pinned Helm client
+      ansible.builtin.assert:
+        that:
+          - "cluster_helm_version_actual.stdout is search('v' ~ cluster_helm_version)"
+
+    - name: Render the Cilium values
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/cilium-values.yaml.j2"
+        dest: /etc/kubernetes/cilium-values.yaml
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+
+    - name: Detect an existing Cilium release
+      ansible.builtin.command:
+        argv: [helm, status, cilium, --namespace, kube-system, --output, json]
+      register: cilium_release
+      changed_when: false
+      failed_when: false
+
+    - name: Stop if Helm failed for a reason other than a missing release
+      ansible.builtin.assert:
+        that:
+          - "cilium_release.rc == 0 or 'release: not found' in cilium_release.stderr"
+
+    - name: Install Cilium version pinned in the inventory
+      ansible.builtin.command:
+        argv:
+          - helm
+          - install
+          - cilium
+          - oci://quay.io/cilium/charts/cilium
+          - --version
+          - "{{ cluster_cilium_version }}"
+          - --namespace
+          - kube-system
+          - --values
+          - /etc/kubernetes/cilium-values.yaml
+      when: cilium_release.rc != 0
+      changed_when: true
+
+    - name: Wait for the Cilium agent on the controller
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --namespace
+          - kube-system
+          - rollout
+          - status
+          - daemonset/cilium
+          - --timeout=10m
+      changed_when: false
+
+    - name: Verify the installed Cilium chart version
+      ansible.builtin.command:
+        argv: [helm, list, --namespace, kube-system, --filter, '^cilium$', --output, json]
+      register: cilium_installed_version
+      changed_when: false
+
+    - name: Require a deployed pinned release
+      ansible.builtin.assert:
+        that:
+          - "(cilium_installed_version.stdout | from_json | length) == 1"
+          - "(cilium_installed_version.stdout | from_json)[0].chart == 'cilium-' ~ cluster_cilium_version"
+          - "(cilium_installed_version.stdout | from_json)[0].status == 'deployed'"

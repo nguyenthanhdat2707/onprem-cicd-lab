@@ -5,10 +5,10 @@ plan has been applied. Live findings are in `STAGE0_STATUS_2026-11-25.md`.
 
 ## Problem and intended outcome
 
-GitLab CE 19.2.1 serves HTTP on `10.20.0.10:80`; port 443 and the expected
-registry port 5050 are closed. A source repository can be created only after
-the project owner decides how GitLab credentials and image artifacts will be
-protected in the lab. Stage 1 requires trusted TLS and a reachable registry.
+GitLab CE 19.2.1 served HTTP on `10.20.0.10:80` at the last live check; port
+443 and the expected registry port 5050 were closed. The source and GitOps
+projects now exist, and Git over SSH works. Stage 1 build/publish still needs
+trusted TLS and a reachable registry.
 
 For the existing private subnet, the smallest workable endpoint design is
 `https://10.20.0.10` for GitLab and `https://10.20.0.10:5050` for the registry,
@@ -52,8 +52,8 @@ otherwise HTTPS and image pulls will still fail.
    access to Docker and filesystem, and whether untagged jobs are accepted.
    Choose the builder only after this result. Do not enable privileged
    Docker-in-Docker by default.
-7. Create a **source** GitLab project from this workspace root; keep the
-   later GitOps manifests in a separate project. The root `.gitlab-ci.yml`
+7. Push this workspace root to the existing **source** GitLab project; keep
+   later GitOps Helm/manifests in `cicd-gitops-lab`. The root `.gitlab-ci.yml`
    first runs app unit tests, then scan/build/SBOM/publish jobs are added one
    verified gate at a time.
 

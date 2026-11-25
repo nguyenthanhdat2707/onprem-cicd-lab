@@ -30,16 +30,17 @@ part of the app.
 2. Confirm GitLab UI/API, TLS certificate, registry endpoint, runner
    registration, executor and a small non-privileged job. Record exact versions
    and available storage before choosing the image builder.
-3. Create a GitLab source project and configure a runner with the least
-   required permissions. Keep cluster credentials out of CI.
+3. Use the existing GitLab source project and configure a runner with the
+   least required permissions. Keep cluster credentials out of CI.
 4. Add CI jobs for unit tests, secret/source scan, image build, image scan,
    CycloneDX SBOM and publish. Pin tool and base-image versions/digests, and
    record commit SHA, pipeline ID, image digest and report artifacts.
 5. Check node-to-registry pull over trusted TLS. Deploy only by digest after
    Stage 1 gates pass; test frontend `/` and both `/healthz` endpoints.
 
-The root `.gitlab-ci.yml` includes `ci/demo-app.yml`, currently a unit-test
-job only. Builder, registry URL and Kubernetes manifests depend on live
+The root `.gitlab-ci.yml` includes `ci/demo-app.yml` for the unit test and
+`ci/runner-smoke.yml` for optional manual executor checks. Builder, registry
+URL and Kubernetes manifests depend on live
 runner/registry checks. Do not assume Docker-in-Docker or privileged mode.
 GitOps, signing and admission belong to later stages in `PROJECT_SPEC.md`.
 Repository boundaries are in `REPOSITORY_ARCHITECTURE.md`.

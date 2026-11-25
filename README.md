@@ -2,8 +2,8 @@
 
 Repo này chứa automation Ansible cho lab Proxmox/Kubernetes, tài liệu đồ án
 DevSecOps và mã nguồn demo app. Cluster hai node đã được ghi nhận nghiệm thu;
-pipeline hiện mới có unit test, còn registry, GitOps và security controls đang
-ở mức kế hoạch.
+pipeline hiện mới có unit test và hai job kiểm tra runner chạy thủ công; còn
+registry, GitOps và security controls đang ở mức kế hoạch.
 
 Tài liệu bắt đầu tại [mục lục docs](docs/README.md),
 [đề cương](docs/project/PROJECT_BRIEF.md), [spec chi tiết](docs/specs/PROJECT_SPEC.md)
@@ -15,7 +15,7 @@ Chuẩn bị Stage 1 trên máy local nằm tại [demo app](apps/demo-app/READM
 kiểm tra trực tiếp ngày 25/11 nằm tại
 [Stage 0 status](docs/infrastructure/STAGE0_STATUS_2026-11-25.md).
 [Phương án HTTPS/registry](docs/infrastructure/GITLAB_TLS_REGISTRY_PLAN.md)
-ghi các gate cần xử lý trước khi tạo repo GitLab và publish image.
+ghi các gate cần xử lý trước khi chạy pipeline publish image.
 
 ## Ansible cho các VM Ubuntu trên Proxmox
 

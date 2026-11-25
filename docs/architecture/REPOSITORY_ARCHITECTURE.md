@@ -2,13 +2,15 @@
 
 Quyết định ngày 25/11/2026: dùng **modular monorepo** cho source, CI, Ansible
 và tài liệu; dùng **một GitOps repo riêng** cho trạng thái triển khai mà Argo CD
-theo dõi. Hiện chưa tạo project GitLab hay GitOps repo trên server.
+theo dõi. Hai GitLab project đã được tạo; thay đổi source đi qua nhánh feature,
+còn GitOps repo chưa có chart/manifest trong workspace này.
 
 ```text
 DACN2-Final/                       # repo kỹ thuật / source project
 ├── .gitlab-ci.yml                 # entrypoint GitLab CI tại gốc repo
 ├── ci/                            # job CI theo ứng dụng
-│   └── demo-app.yml
+│   ├── demo-app.yml
+│   └── runner-smoke.yml           # kiểm tra executor thủ công
 ├── apps/
 │   └── demo-app/                 # app, test, Dockerfile, Compose local
 ├── ansible/
@@ -20,8 +22,9 @@ DACN2-Final/                       # repo kỹ thuật / source project
 ├── .codex/                        # cấu hình Codex hiện có
 └── .claude/                       # chỗ dành cho Claude nếu cần sau này
 
-DACN2-gitops/                      # GitLab project riêng, tạo ở Stage 2
-├── apps/demo-app/                 # manifests/Kustomize pin image digest
+cicd-gitops-lab/                   # GitLab project riêng cho GitOps
+├── charts/demo-app/              # Helm chart của app
+├── environments/lab/             # values pin image digest
 └── argocd/                        # Application/AppProject theo phạm vi demo
 ```
 
@@ -30,6 +33,11 @@ DACN2-gitops/                      # GitLab project riêng, tạo ở Stage 2
 có thể nằm trong chính thư mục app. Chỉ commit các file hướng dẫn/cấu hình đã
 review. Cache, trạng thái máy local, token, kubeconfig và private key không
 thuộc source repo; các thư mục agent không chứa logic triển khai.
+
+Source project: `git@10.20.0.10:root/cicd-lab.git`.
+GitOps project: `git@10.20.0.10:root/cicd-gitops-lab.git` (nhánh mặc định
+`main`). Cấu trúc Helm ở trên là mục tiêu cho Stage 2, chưa có chart/manifest
+được tạo trong workspace này.
 
 ## Quy tắc đặt file
 
@@ -42,7 +50,8 @@ thuộc source repo; các thư mục agent không chứa logic triển khai.
 - `ansible/`: toàn bộ cấu hình, inventory, playbook, template và file hỗ trợ
   của Ansible. Chạy các lệnh từ thư mục này để Ansible tự nạp `ansible.cfg`.
   Tên playbook và đường dẫn tương đối bên trong playbook được giữ nguyên.
-- GitOps repo: chỉ chứa desired state, image tham chiếu bằng digest và policy
+- GitOps repo: chỉ chứa desired state, Helm chart/values, image tham chiếu
+  bằng digest và policy
   triển khai. Argo CD đọc repo này. CI source không giữ kubeconfig hoặc chạy
   `kubectl apply` trực tiếp; promotion qua thay đổi GitOps được review.
 - Evidence chứa credential thật không được commit vào bất kỳ repo nào.

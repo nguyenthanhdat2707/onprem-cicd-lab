@@ -1,0 +1,37 @@
+services:
+  api:
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:?Set a trusted Python image reference}
+    environment:
+      ROLE: api
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:?Set a trusted Python image reference}
+    environment:
+      ROLE: frontend
+      API_URL: http://api:8080/message
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  decoy:
+    build:
+      context: .
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:?Set a trusted Python image reference}
+    environment:
+      ROLE: decoy
+    ports:
+      - "127.0.0.1:8082:8080"

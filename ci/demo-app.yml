@@ -1,0 +1,9 @@
+unit-test:
+  stage: test
+  tags:
+    - network-lab
+  variables:
+    PYTHONDONTWRITEBYTECODE: "1"
+  script:
+    - cd apps/demo-app
+    - python3 -m unittest -v

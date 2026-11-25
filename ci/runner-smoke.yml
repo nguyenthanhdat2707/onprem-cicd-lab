@@ -1,0 +1,20 @@
+test-docker:
+  stage: test
+  image: alpine:latest
+  tags:
+    - homelab
+  when: manual
+  allow_failure: true
+  script:
+    - hostname
+    - echo "Docker executor OK"
+
+test-shell:
+  stage: test
+  tags:
+    - network-lab
+  when: manual
+  allow_failure: true
+  script:
+    - hostname
+    - echo "Shell executor OK"

@@ -1,0 +1,39 @@
+---
+- name: Check route before SSH bootstrap
+  import_playbook: preflight.yml
+
+- name: Check the local SSH public key
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check public key file
+      ansible.builtin.stat:
+        path: "{{ bootstrap_public_key_file }}"
+      delegate_to: localhost
+      register: public_key_stat
+
+    - name: Require an existing public key
+      ansible.builtin.assert:
+        that:
+          - public_key_stat.stat.isreg | default(false)
+        fail_msg: >-
+          Create an SSH key first or set bootstrap_public_key_file to an
+          existing .pub file: {{ bootstrap_public_key_file }}
+
+- name: Install the public key for the initial SSH user
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Ensure the user's SSH directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts.env.HOME }}/.ssh"
+        state: directory
+        mode: '0700'
+
+    - name: Add the public key without replacing existing keys
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_facts.env.HOME }}/.ssh/authorized_keys"
+        line: "{{ lookup('ansible.builtin.file', bootstrap_public_key_file) }}"
+        create: true
+        mode: '0600'
+        state: present

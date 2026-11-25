@@ -1,0 +1,149 @@
+---
+- name: Check routes before inspecting the Kubernetes nodes
+  import_playbook: preflight.yml
+
+- name: Inspect cluster prerequisites without changing the VMs
+  hosts: kubernetes
+  become: true
+  gather_facts: true
+  serial: 1
+
+  vars:
+    cluster_peer_ip: "{{ cluster_api_address if 'workers' in group_names else hostvars['k8s-worker'].ansible_host }}"
+
+  tasks:
+    - name: Require the intended Ubuntu VM and architecture
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_version == '24.04'
+          - ansible_facts.architecture == 'x86_64'
+          - ansible_facts.hostname == desired_hostname
+          - ansible_host is defined
+
+    - name: Read the intended node interface
+      ansible.builtin.command:
+        argv: [ip, -o, -4, addr, show, dev, ens19]
+      register: cluster_interface
+      changed_when: false
+
+    - name: Require the node IP on ens19
+      ansible.builtin.assert:
+        that:
+          - "cluster_interface.stdout is search('inet ' ~ ansible_host ~ '/')"
+
+    - name: Read the route to the other node
+      ansible.builtin.command:
+        argv: [ip, -4, route, get, "{{ cluster_peer_ip }}"]
+      register: cluster_peer_route
+      changed_when: false
+
+    - name: Require direct node connectivity on ens19
+      ansible.builtin.assert:
+        that:
+          - "cluster_peer_route.stdout is search(' dev ens19 ')"
+          - "cluster_peer_route.stdout is search(' src ' ~ ansible_host ~ ' ')"
+
+    - name: Show existing IPv4 routes for CIDR review
+      ansible.builtin.command:
+        argv: [ip, -4, route, show]
+      register: cluster_routes
+      changed_when: false
+
+    - name: Display routes before allocating pod and service CIDRs
+      ansible.builtin.debug:
+        var: cluster_routes.stdout_lines
+
+    - name: Check free space on root
+      ansible.builtin.command:
+        argv: [df, -B1, --output=avail, /]
+      register: cluster_disk
+      changed_when: false
+
+    - name: Require at least 5 GiB before pulling cluster images
+      ansible.builtin.assert:
+        that:
+          - cluster_disk.stdout_lines[-1] | int >= 5368709120
+
+    - name: Check active swap
+      ansible.builtin.command:
+        argv: [swapon, --noheadings, --show=NAME]
+      register: cluster_swap
+      changed_when: false
+
+    - name: Require swap disabled
+      ansible.builtin.assert:
+        that:
+          - cluster_swap.stdout | trim == ''
+
+    - name: Check IPv4 forwarding
+      ansible.builtin.slurp:
+        src: /proc/sys/net/ipv4/ip_forward
+      register: cluster_forwarding
+
+    - name: Require IPv4 forwarding
+      ansible.builtin.assert:
+        that:
+          - cluster_forwarding.content | b64decode | trim == '1'
+
+    - name: Check containerd and Kubernetes versions
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      loop:
+        - [systemctl, is-active, containerd]
+        - [crictl, --runtime-endpoint, "{{ cluster_cri_socket }}", version]
+        - [kubeadm, version, -o, short]
+      register: cluster_components
+      changed_when: false
+
+    - name: Require the pinned kubeadm version
+      ansible.builtin.assert:
+        that:
+          - cluster_components.results[0].stdout | trim == 'active'
+          - cluster_components.results[2].stdout | trim == cluster_kubernetes_version
+
+    - name: Check whether the node already joined a cluster
+      ansible.builtin.stat:
+        path: "{{ '/etc/kubernetes/admin.conf' if 'controllers' in group_names else '/etc/kubernetes/kubelet.conf' }}"
+      register: cluster_joined_file
+
+    - name: Inspect any static pod manifests
+      ansible.builtin.find:
+        paths: /etc/kubernetes/manifests
+        file_type: file
+      register: cluster_manifests
+
+    - name: Require a fresh node before bootstrap
+      ansible.builtin.assert:
+        that:
+          - not cluster_joined_file.stat.exists
+          - cluster_manifests.matched == 0
+        fail_msg: Existing Kubernetes state needs review before bootstrap.
+
+    - name: Confirm Docker has no running containers on the worker
+      ansible.builtin.command:
+        argv: [docker, ps, -q]
+      register: cluster_docker_containers
+      changed_when: false
+      when: "'workers' in group_names"
+
+    - name: Require Docker to have no running containers
+      ansible.builtin.assert:
+        that:
+          - cluster_docker_containers.stdout | trim == ''
+      when: "'workers' in group_names"
+
+    - name: Read UFW status and rules
+      ansible.builtin.command:
+        argv: [ufw, status, numbered]
+      register: cluster_ufw
+      changed_when: false
+
+    - name: Display UFW rules for review before firewall changes
+      ansible.builtin.debug:
+        var: cluster_ufw.stdout_lines
+
+    - name: Require a recognized UFW status
+      ansible.builtin.assert:
+        that:
+          - "cluster_ufw.stdout is search('Status: (active|inactive)')"

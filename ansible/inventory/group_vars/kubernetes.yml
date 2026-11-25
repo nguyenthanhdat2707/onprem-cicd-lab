@@ -1,0 +1,16 @@
+kubernetes_minor: '1.36'
+kubernetes_node_packages:
+  - kubeadm
+  - kubelet
+  - cri-tools
+
+# Cluster bootstrap. Keep these CIDRs distinct from all VM and Docker networks.
+cluster_kubernetes_version: v1.36.6
+cluster_pod_cidr: 10.244.0.0/16
+cluster_service_cidr: 10.96.0.0/12
+cluster_api_address: 10.20.0.15
+cluster_cri_socket: unix:///run/containerd/containerd.sock
+cluster_cilium_version: 1.20.5
+cluster_helm_version: 3.21.4
+cluster_helm_amd64_sha256: 61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14
+

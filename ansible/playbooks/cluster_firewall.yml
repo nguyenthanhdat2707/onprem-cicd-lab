@@ -1,0 +1,48 @@
+---
+- name: Check routes before applying the temporary UFW decision
+  import_playbook: preflight.yml
+
+- name: Keep UFW inactive during the initial cluster bootstrap
+  hosts: kubernetes
+  become: true
+  gather_facts: false
+  serial: 1
+
+  tasks:
+    - name: Require only the approved controller or worker
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in ['k8s-controller', 'k8s-worker']
+          - ansible_host in ['10.20.0.15', '10.20.0.12']
+
+    - name: Read UFW state before changes
+      ansible.builtin.command:
+        argv: [ufw, status, verbose]
+      register: ufw_before
+      changed_when: false
+
+    - name: Require a recognized UFW state
+      ansible.builtin.assert:
+        that:
+          - "ufw_before.stdout is search('Status: (active|inactive)')"
+
+    - name: Disable UFW temporarily when it is active
+      ansible.builtin.command:
+        argv: [ufw, --force, disable]
+      when: "ufw_before.stdout is search('Status: active')"
+      changed_when: true
+
+    - name: Read the resulting UFW state
+      ansible.builtin.command:
+        argv: [ufw, status, verbose]
+      register: ufw_after
+      changed_when: false
+
+    - name: Require UFW inactive for this bootstrap
+      ansible.builtin.assert:
+        that:
+          - "ufw_after.stdout is search('Status: inactive')"
+
+    - name: Display the final UFW status
+      ansible.builtin.debug:
+        var: ufw_after.stdout_lines

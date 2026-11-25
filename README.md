@@ -1,93 +1,156 @@
-# CICD-Lab
+# Secure Software Supply Chain & Runtime Security for Kubernetes
 
+Repo này chứa automation Ansible cho lab Proxmox/Kubernetes, tài liệu đồ án
+DevSecOps và mã nguồn demo app. Cluster hai node đã được ghi nhận nghiệm thu;
+pipeline hiện mới có unit test và hai job kiểm tra runner chạy thủ công; còn
+registry, GitOps và security controls đang ở mức kế hoạch.
 
+Tài liệu bắt đầu tại [mục lục docs](docs/README.md),
+[đề cương](docs/project/PROJECT_BRIEF.md), [spec chi tiết](docs/specs/PROJECT_SPEC.md)
+và [flow quay video](docs/demo/VIDEO_DEMO_FLOW.md).
 
-## Getting started
+Kiến trúc repo nằm tại [repository architecture](docs/architecture/REPOSITORY_ARCHITECTURE.md).
+Chuẩn bị Stage 1 trên máy local nằm tại [demo app](apps/demo-app/README.md) và
+[kế hoạch Stage 1](docs/architecture/STAGE1_LOCAL_PLAN.md). Trạng thái lab
+kiểm tra trực tiếp ngày 25/11 nằm tại
+[Stage 0 status](docs/infrastructure/STAGE0_STATUS_2026-11-25.md).
+[Phương án HTTPS/registry](docs/infrastructure/GITLAB_TLS_REGISTRY_PLAN.md)
+ghi các gate cần xử lý trước khi chạy pipeline publish image.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Ansible cho các VM Ubuntu trên Proxmox
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+Toàn bộ cấu hình Ansible nằm trong [ansible/](ansible/).
+Các lệnh Ansible bên dưới giả định terminal đang ở thư mục này. Từ gốc repo,
+chạy `cd ansible` một lần trước khi dùng các lệnh đó; terminal mới cần chạy
+lại bước này.
 
-## Add your files
+Inventory hiện có bốn VM: `gitlab-server` (`10.20.0.10`, user `gitlab`),
+`gitlab-runner` (`10.20.0.11`, user `runner`), `k8s-worker` (`10.20.0.12`,
+user `tdat`) và `k8s-controller` (`10.20.0.15`, user `k8s-controller`).
+`bootstrap_ssh.yml` thêm SSH key cho từng VM. `prepare_vms.yml` chỉ áp dụng
+cho controller và worker.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Trước khi chạy
 
+1. Xác nhận các user trong inventory đăng nhập SSH được. User trên controller
+   và worker cần quyền `sudo` để chạy `prepare_vms.yml`.
+2. Xác nhận host key từ console của từng VM rồi thêm vào `known_hosts`. Ansible giữ
+   `host_key_checking=True`; không tự động tin một host key chưa kiểm chứng.
+3. Đảm bảo máy chạy Ansible có route `10.20.0.0/24` qua next hop
+   `192.168.101.81`. `ansible/playbooks/preflight.yml` kiểm tra route và dừng nếu khác.
+   Nó không sửa cấu hình mạng. Route đã được người dùng đặt tạm thời qua `.81`
+   và cổng SSH của cả bốn IP đã mở tại lần kiểm tra gần nhất. Khi route mất
+   sau khởi động lại, người quản trị máy Ansible có thể đặt lại và kiểm bằng:
+
+   ```bash
+   sudo ip route replace 10.20.0.0/24 via 192.168.101.81 dev wlan0
+   ip route get 10.20.0.12
+   ip route get 10.20.0.15
+   ```
+
+   Lệnh `ip route` này không tự tồn tại sau khi khởi động lại; cấu hình route
+   cố định phụ thuộc cách máy quản lý mạng.
+4. Chuẩn bị public key `~/.ssh/id_ed25519.pub`, hoặc đổi
+   `bootstrap_public_key_file` trong `ansible/inventory/group_vars/all.yml`.
+
+SSH key đã được kiểm tra trên cả bốn VM; các lệnh bootstrap dưới đây chỉ cần
+khi dựng lại VM hoặc chuyển sang máy điều khiển Ansible khác:
+
+```bash
+cd ansible
+ansible-playbook playbooks/bootstrap_ssh.yml --limit gitlab-server --ask-pass
+ansible-playbook playbooks/bootstrap_ssh.yml --limit gitlab-runner --ask-pass
+ansible-playbook playbooks/bootstrap_ssh.yml --limit k8s-worker --ask-pass
+ansible-playbook playbooks/bootstrap_ssh.yml --limit k8s-controller --ask-pass
 ```
-cd existing_repo
-git remote add origin http://10.20.0.10/root/cicd-lab.git
-git branch -M main
-git push -uf origin main
+
+## Chuẩn bị controller và worker cho Kubernetes
+
+`prepare_vms.yml` chỉ nhắm vào VM 104 và VM 100. Nó kiểm tra Ubuntu 24.04,
+ít nhất 5 GiB trống trên `/` và không có Docker container đang chạy trên
+worker. Sau đó nó:
+
+- Cài `kubeadm`, `kubelet`, `cri-tools` trên cả hai node; cài `kubectl` trên
+  controller. APT repo chỉ chứa nhánh Kubernetes `1.36`. Lần chạy đầu cài bản
+  vá mới nhất có trong repo rồi giữ các phiên bản đã cài bằng dpkg hold.
+- Cài `containerd` từ Ubuntu trên controller. Worker giữ `containerd.io` hiện
+  có của Docker. Cả hai nhận cấu hình CRI và `systemd` cgroup; chỉ restart
+  containerd khi cấu hình đổi. Playbook không thay gói Docker của worker.
+- Tắt swap hiện tại và ngăn nó bật lại từ `/etc/fstab`, bật IPv4 forwarding,
+  đặt hostname `k8s-worker`/`k8s-controller` và cập nhật `/etc/hosts`.
+- Chỉ tạo các thư mục cấu hình hệ thống cần dùng như `/etc/apt/keyrings` và
+  `/etc/containerd`. Không tạo thư mục dự án tùy ý trên node.
+
+Chạy từng máy từ `ansible/` để nhập đúng mật khẩu `sudo` của user tương ứng:
+
+```bash
+ansible-playbook playbooks/preflight.yml
+ansible-playbook playbooks/prepare_vms.yml --limit k8s-controller --ask-become-pass
+ansible-playbook playbooks/prepare_vms.yml --limit k8s-worker --ask-become-pass
 ```
 
-## Integrate with your tools
+Nếu một bước lỗi, dừng và kiểm tra trạng thái thực tế trước khi thử lại. Các
+task sửa file cấu hình có tạo bản sao lưu, nhưng playbook không tự rollback
+dịch vụ hoặc package. Worker hiện có Docker đang chạy; thay cấu hình containerd
+có thể ảnh hưởng workload Docker dù playbook đã chặn khi còn container đang
+chạy. Sau khi xóa project GNS3, dung lượng trống đo được khoảng 12 GiB trên
+worker và 7,7 GiB trên controller; chưa chứng minh đủ cho toàn bộ image và
+telemetry của đồ án.
 
-* [Set up project integrations](http://10.20.0.10/root/cicd-lab/-/settings/integrations)
+`prepare_vms.yml` chỉ chuẩn bị node. Các playbook `cluster_*.yml` đã dựng
+cluster bằng kubeadm và Cilium; Argo CD, GitLab và runner thuộc stage sau.
+Cluster dùng địa chỉ `10.20.0.15`/`10.20.0.12` trên `ens19`; hai VM còn có
+interface DHCP `192.168.101.x` trên `ens18`.
 
-## Collaborate with your team
+## Bàn giao cluster 23/11/2026
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+- Controller và worker đều đăng nhập SSH bằng key và trả `pong` qua Ansible.
+- `k8s-controller` (`10.20.0.15`) và `k8s-worker` (`10.20.0.12`) đều `Ready`
+  với Kubernetes v1.36.6. Cilium DaemonSet, Cilium operator và CoreDNS đều
+  đạt `2/2`.
+- `cluster_verify.yml` đã kiểm tra tên node, InternalIP và trạng thái các
+  thành phần. `cluster_smoke.yml` đã xác nhận DNS và truy cập Service từ pod
+  trên worker tới pod trên controller, sau đó xóa namespace thử nghiệm.
+- Controller đã có cấu hình Netplan cho `10.20.0.15/24` trên `ens19`, nhưng
+  chưa thử khởi động lại để xác nhận IP tự lên. Route từ máy chạy Ansible tới
+  `10.20.0.0/24` qua `192.168.101.81` vẫn là cấu hình tạm.
+- GitLab, runner, Registry, Argo CD và observability chưa nằm trong stage
+  cluster này.
 
-## Test and Deploy
+Tên hiển thị VM trong Proxmox là một cấu hình riêng, không đổi khi hostname
+Ubuntu đổi. Chưa có playbook đổi tên Proxmox vì chưa xác nhận địa chỉ, phiên
+bản và cách đăng nhập host `pve`.
 
-Use the built-in continuous integration in GitLab.
+## Dựng cluster hai node
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+Xem [kế hoạch và điều kiện dừng](docs/infrastructure/K8S_CLUSTER_PLAN.md). Các playbook
+`cluster_*.yml` phục vụ cluster mới trên VM 104 và 100. Chạy từ `ansible/`
+và kiểm tra kết quả từng bước trước khi sang bước tiếp. Mật khẩu `sudo`
+của controller và worker có thể khác nhau; không lưu vào inventory.
 
-***
+Đầu tiên, chạy preflight chỉ đọc trên từng VM và xem output UFW:
 
-# Editing this README
+```bash
+ansible-playbook playbooks/cluster_preflight.yml --limit k8s-controller --ask-become-pass
+ansible-playbook playbooks/cluster_preflight.yml --limit k8s-worker --ask-become-pass
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Người dùng chọn tạm giữ UFW inactive. `cluster_firewall.yml` chỉ gọi
+`ufw disable` nếu node đang active; nó không xóa các rules đã lưu.
+Sau preflight, thực hiện từng bước:
 
-## Suggestions for a good README
+```bash
+ansible-playbook playbooks/cluster_firewall.yml --limit k8s-controller --ask-become-pass
+ansible-playbook playbooks/cluster_firewall.yml --limit k8s-worker --ask-become-pass
+ansible-playbook playbooks/cluster_init.yml --limit k8s-controller --ask-become-pass
+ansible-playbook playbooks/cluster_cilium.yml --limit k8s-controller --ask-become-pass
+ansible-playbook playbooks/cluster_join.yml --limit k8s-worker
+ansible-playbook playbooks/cluster_verify.yml --limit k8s-controller
+ansible-playbook playbooks/cluster_smoke.yml --limit k8s-controller
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+`cluster_join.yml` tự hỏi hai mật khẩu `sudo` qua prompt riêng và không ghi
+chúng vào file. Nó dùng token một giờ, không in token ra log và xóa file join
+tạm sau khi chạy. `cluster_smoke.yml` tạo namespace tạm để kiểm DNS và Service
+qua hai node, rồi xóa namespace nếu mọi probe thành công; nếu probe lỗi thì
+giữ lại để chẩn đoán. Không chạy tiếp bước sau khi một playbook báo lỗi.

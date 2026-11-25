@@ -1,0 +1,69 @@
+---
+- name: Check route to the Kubernetes controller
+  import_playbook: preflight.yml
+
+- name: Verify both nodes and the base cluster components
+  hosts: controllers
+  become: false
+  gather_facts: false
+
+  environment:
+    KUBECONFIG: /home/k8s-controller/.kube/config
+
+  tasks:
+    - name: Wait for both nodes to become Ready
+      ansible.builtin.command:
+        argv: [kubectl, wait, --for=condition=Ready, nodes, --all, --timeout=10m]
+      changed_when: false
+
+    - name: Collect node identities and addresses
+      ansible.builtin.command:
+        argv: [kubectl, get, nodes, --output=json]
+      register: cluster_nodes_json
+      changed_when: false
+
+    - name: Decode the node list
+      ansible.builtin.set_fact:
+        cluster_nodes: "{{ (cluster_nodes_json.stdout | from_json)['items'] }}"
+
+    - name: Require exactly the two intended nodes
+      ansible.builtin.assert:
+        that:
+          - cluster_nodes | length == 2
+          - "(cluster_nodes | map(attribute='metadata.name') | list | sort) == ['k8s-controller', 'k8s-worker']"
+
+    - name: Require each node Ready on its 10.20 address
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.status.addresses | selectattr('type', 'equalto', 'InternalIP') |
+            map(attribute='address') | first) == hostvars[item.metadata.name].ansible_host
+          - "(item.status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | first) == 'True'"
+      loop: "{{ cluster_nodes }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Wait for Cilium on every node
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, kube-system, rollout, status, daemonset/cilium, --timeout=10m]
+      changed_when: false
+
+    - name: Wait for Cilium operator
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, kube-system, rollout, status, deployment/cilium-operator, --timeout=10m]
+      changed_when: false
+
+    - name: Wait for CoreDNS
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, kube-system, rollout, status, deployment/coredns, --timeout=10m]
+      changed_when: false
+
+    - name: Show the system pods and placement
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, kube-system, get, pods, --output=wide]
+      register: cluster_system_pods
+      changed_when: false
+
+    - name: Display the system pod inventory
+      ansible.builtin.debug:
+        var: cluster_system_pods.stdout_lines

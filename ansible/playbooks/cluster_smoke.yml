@@ -1,0 +1,68 @@
+---
+- name: Probe DNS and cross-node Service networking
+  hosts: controllers
+  become: false
+  gather_facts: false
+
+  environment:
+    KUBECONFIG: /home/k8s-controller/.kube/config
+
+  tasks:
+    - name: Refuse to reuse an existing smoke namespace
+      ansible.builtin.command:
+        argv: [kubectl, get, namespace, dacn2-cluster-smoke, --ignore-not-found, --output=name]
+      register: existing_smoke_namespace
+      changed_when: false
+
+    - name: Require no existing namespace
+      ansible.builtin.assert:
+        that:
+          - existing_smoke_namespace.stdout | trim == ''
+
+    - name: Create the scoped smoke resources
+      ansible.builtin.command:
+        argv: [kubectl, apply, --filename, '-']
+        stdin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/cluster-smoke.yaml') }}"
+      register: smoke_apply
+      changed_when: "'created' in smoke_apply.stdout"
+
+    - name: Wait for the server pod on the controller
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, dacn2-cluster-smoke, wait, --for=condition=Ready, pod/smoke-server, --timeout=5m]
+      changed_when: false
+
+    - name: Wait for the client pod on the worker
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, dacn2-cluster-smoke, wait, --for=condition=Ready, pod/smoke-client, --timeout=5m]
+      changed_when: false
+
+    - name: Resolve the service through cluster DNS
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, dacn2-cluster-smoke, exec, smoke-client, --, nslookup, smoke-server.dacn2-cluster-smoke.svc.cluster.local]
+      changed_when: false
+
+    - name: Reach the server across nodes through its Service
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, dacn2-cluster-smoke, exec, smoke-client, --, wget, -qO-, http://smoke-server:8080/hostname]
+      register: smoke_http
+      changed_when: false
+
+    - name: Require the controller pod response
+      ansible.builtin.assert:
+        that:
+          - smoke_http.stdout | trim == 'smoke-server'
+
+    - name: Show probe placement before cleanup
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, dacn2-cluster-smoke, get, pods, --output=wide]
+      register: smoke_placement
+      changed_when: false
+
+    - name: Display probe placement
+      ansible.builtin.debug:
+        var: smoke_placement.stdout_lines
+
+    - name: Remove the scoped smoke namespace after success
+      ansible.builtin.command:
+        argv: [kubectl, delete, namespace, dacn2-cluster-smoke, --wait=true, --timeout=5m]
+      changed_when: true

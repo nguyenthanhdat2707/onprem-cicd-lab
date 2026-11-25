@@ -1,6 +1,8 @@
 stages:
   - test
+  - scan
 
 include:
   - local: /ci/demo-app.yml
   - local: /ci/runner-smoke.yml
+  - local: /ci/secret-scan.yml

@@ -1,0 +1,21 @@
+sign-image-and-sbom:
+  stage: sign
+  tags:
+    - network-lab
+  variables:
+    COSIGN_IMAGE: "ghcr.io/sigstore/cosign/cosign:v3.1.1"
+  needs:
+    - job: build-scan-sbom-publish
+      artifacts: true
+  rules:
+    - if: '$CI_SERVER_PROTOCOL == "https" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never
+  script:
+    - bash ci/sign-image.sh
+  artifacts:
+    when: always
+    paths:
+      - reports/signature-verify.json
+      - reports/attestation-verify.json
+      - reports/signing-evidence.txt
+    expire_in: 7 days

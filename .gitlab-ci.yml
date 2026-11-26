@@ -2,9 +2,11 @@ stages:
   - test
   - scan
   - image
+  - sign
 
 include:
   - local: /ci/demo-app.yml
   - local: /ci/runner-smoke.yml
   - local: /ci/secret-scan.yml
   - local: /ci/image.yml
+  - local: /ci/sign-image.yml

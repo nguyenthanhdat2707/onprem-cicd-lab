@@ -4,7 +4,13 @@ The source pipeline is configured to run the demo app unit test on runner tag
 `network-lab`, then a Trivy 0.76.2 secret scan on runner tag `homelab`.
 The Docker and shell runner diagnostics remain optional manual jobs.
 Runner logs confirmed that pipeline 40 ran jobs 134 and 137 successfully after
-HTTPS and runner access were enabled. The image job has not yet been observed.
+HTTPS and runner access were enabled. Pipeline 42 on `main` built the image but
+failed image scan: the Debian Bookworm base had 100 HIGH and 2 CRITICAL
+findings. On the repair branch, pipeline 44 reduced this to 16 HIGH findings,
+all in `krb5-libs`. The Alpine 3.24 package update to `1.22.3-r0` produced
+zero HIGH/CRITICAL findings in pipeline 45; image job 159 succeeded after the
+container API smoke test and Syft SBOM step. The repair branch has not been
+merged, so the default branch has not published a passing image yet.
 With `CI_SERVER_PROTOCOL=https`, the secret scan runs automatically and fails
 the pipeline on findings.
 
@@ -16,7 +22,8 @@ deterministic lab marker rule for S01 while retaining Trivy's built-in rules.
 The marker format is `LAB_FAKE_SECRET_` followed by 16 uppercase letters or
 digits. Use only synthetic values in a demo branch; do not commit real keys.
 
-The image job builds the demo app from a digest-pinned Python base image,
+The image job builds the demo app from a digest-pinned Python 3.12 Alpine 3.24
+base image,
 blocks on HIGH/CRITICAL image vulnerabilities with Trivy 0.76.2, and writes a
 CycloneDX JSON SBOM with Syft v1.57.2. It uses the `network-lab` shell runner
 and its Docker daemon, avoiding a second privileged Docker daemon. On feature

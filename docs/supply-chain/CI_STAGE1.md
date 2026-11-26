@@ -9,8 +9,10 @@ failed image scan: the Debian Bookworm base had 100 HIGH and 2 CRITICAL
 findings. On the repair branch, pipeline 44 reduced this to 16 HIGH findings,
 all in `krb5-libs`. The Alpine 3.24 package update to `1.22.3-r0` produced
 zero HIGH/CRITICAL findings in pipeline 45; image job 159 succeeded after the
-container API smoke test and Syft SBOM step. The repair branch has not been
-merged, so the default branch has not published a passing image yet.
+container API smoke test and Syft SBOM step. After removing temporary runner
+journal diagnostics, pipeline 46 image job 164 also succeeded. At the
+2026-11-26 pre-merge check, the repair branch had not been merged and `main`
+had not published a passing image.
 With `CI_SERVER_PROTOCOL=https`, the secret scan runs automatically and fails
 the pipeline on findings.
 
@@ -39,6 +41,12 @@ to limit runner disk use; Docker's shared build cache is left in place.
 
 At the 2026-11-26 read-only check, `https://10.20.0.10/` returned HTTP 302
 with valid TLS verification, and `https://10.20.0.10:5050/v2/` returned HTTP
-401 with valid TLS verification. This confirms the registry endpoint is live;
-Docker login, build, scan, SBOM generation and push still require a real runner
-job for end-to-end confirmation. Do not put kubeconfig into the source pipeline.
+401 with valid TLS verification. This confirms the registry endpoint is live.
+Build, image scan and SBOM generation have since passed on the runner; Docker
+login and push still require a default-branch job. Do not put kubeconfig into
+the source pipeline.
+
+At the later 2026-11-26 pre-merge check, both Kubernetes nodes were `Ready`.
+The controller and worker each received HTTP 401 from the registry endpoint
+with valid TLS verification. A containerd pull by digest and deployed app
+responses remain unverified until the default-branch image is published.

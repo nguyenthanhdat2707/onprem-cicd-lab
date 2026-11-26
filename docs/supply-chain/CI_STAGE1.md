@@ -3,8 +3,16 @@
 The source pipeline is configured to run the demo app unit test on runner tag
 `network-lab`, then a Trivy 0.76.2 secret scan on runner tag `homelab`.
 The Docker and shell runner diagnostics remain optional manual jobs.
-The user reported a successful pipeline run after enabling HTTPS and runner
-access. The exact job logs and commit of that run have not yet been inspected.
+Runner logs confirmed that pipeline 40 ran jobs 134 and 137 successfully after
+HTTPS and runner access were enabled. Pipeline 42 on `main` built the image but
+failed image scan: the Debian Bookworm base had 100 HIGH and 2 CRITICAL
+findings. On the repair branch, pipeline 44 reduced this to 16 HIGH findings,
+all in `krb5-libs`. The Alpine 3.24 package update to `1.22.3-r0` produced
+zero HIGH/CRITICAL findings in pipeline 45; image job 159 succeeded after the
+container API smoke test and Syft SBOM step. After removing temporary runner
+journal diagnostics, pipeline 46 image job 164 also succeeded. At the
+2026-11-26 pre-merge check, the repair branch had not been merged and `main`
+had not published a passing image.
 With `CI_SERVER_PROTOCOL=https`, the secret scan runs automatically and fails
 the pipeline on findings.
 
@@ -16,12 +24,13 @@ deterministic lab marker rule for S01 while retaining Trivy's built-in rules.
 The marker format is `LAB_FAKE_SECRET_` followed by 16 uppercase letters or
 digits. Use only synthetic values in a demo branch; do not commit real keys.
 
-The image job builds the demo app from a digest-pinned Python base image,
+The image job builds the demo app from a digest-pinned Python 3.12 Alpine 3.24
+base image,
 blocks on HIGH/CRITICAL image vulnerabilities with Trivy 0.76.2, and writes a
 CycloneDX JSON SBOM with Syft v1.57.2. It uses the `network-lab` shell runner
 and its Docker daemon, avoiding a second privileged Docker daemon. On feature
-branches it is manual and stops before registry login or push. On the default
-branch it runs automatically after the test and secret-scan stages, then pushes
+branches it runs automatically but stops before registry login or push. On the
+default branch it runs automatically after the test and secret-scan stages, then pushes
 a commit-SHA/job-ID tag to the project registry. The pushed digest is saved
 as `reports/image-ref.txt`. `reports/image-evidence.txt` links that digest to
 the commit, pipeline, local image ID, scan report hash and SBOM hash. Reports
@@ -32,6 +41,12 @@ to limit runner disk use; Docker's shared build cache is left in place.
 
 At the 2026-11-26 read-only check, `https://10.20.0.10/` returned HTTP 302
 with valid TLS verification, and `https://10.20.0.10:5050/v2/` returned HTTP
-401 with valid TLS verification. This confirms the registry endpoint is live;
-Docker login, build, scan, SBOM generation and push still require a real runner
-job for end-to-end confirmation. Do not put kubeconfig into the source pipeline.
+401 with valid TLS verification. This confirms the registry endpoint is live.
+Build, image scan and SBOM generation have since passed on the runner; Docker
+login and push still require a default-branch job. Do not put kubeconfig into
+the source pipeline.
+
+At the later 2026-11-26 pre-merge check, both Kubernetes nodes were `Ready`.
+The controller and worker each received HTTP 401 from the registry endpoint
+with valid TLS verification. A containerd pull by digest and deployed app
+responses remain unverified until the default-branch image is published.

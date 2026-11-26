@@ -45,12 +45,46 @@ docker build --pull \
   --build-arg "PYTHON_BASE_IMAGE=$PYTHON_BASE_IMAGE" \
   --tag "$image_tag" apps/demo-app
 
+docker run --rm --network none "$image_tag" python -c '
+import json
+import threading
+from http.server import ThreadingHTTPServer
+from urllib.request import urlopen
+from app import handler_for
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), handler_for("api", ""))
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+try:
+    with urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=3) as response:
+        assert response.status == 200
+        assert json.load(response) == {"status": "ok", "service": "api"}
+    with urlopen(f"http://127.0.0.1:{server.server_port}/message", timeout=3) as response:
+        assert response.status == 200
+        assert json.load(response) == {"message": "supply-chain-demo"}
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join()
+'
+echo "Container API smoke passed"
+
 docker pull "$TRIVY_IMAGE" >/dev/null
+scan_status=0
 docker run --rm \
   --volume /var/run/docker.sock:/var/run/docker.sock \
   --env TRIVY_NO_PROGRESS=true \
   "$TRIVY_IMAGE" image --scanners vuln --severity HIGH,CRITICAL \
-  --exit-code 1 --format json "$image_tag" > reports/image-scan.json
+  --exit-code 1 --format json "$image_tag" > reports/image-scan.json || scan_status=$?
+if [[ ! -s reports/image-scan.json ]]; then
+  echo "Trivy did not produce an image scan report" >&2
+  exit 1
+fi
+python3 ci/image-scan-summary.py reports/image-scan.json
+if [[ "$scan_status" -ne 0 ]]; then
+  echo "Trivy blocked the image (exit code $scan_status)" >&2
+  exit "$scan_status"
+fi
 
 docker pull "$SYFT_IMAGE" >/dev/null
 docker run --rm \

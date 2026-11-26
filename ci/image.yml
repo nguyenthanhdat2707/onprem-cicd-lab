@@ -3,7 +3,7 @@ build-scan-sbom-publish:
   tags:
     - network-lab
   variables:
-    PYTHON_BASE_IMAGE: "docker.io/library/python:3.12.16-slim-bookworm@sha256:44cf1793efa7c7a476bb0f2cff81443f4a072c90c1cb127e2924933daa3e8c64"
+    PYTHON_BASE_IMAGE: "docker.io/library/python:3.12.16-alpine3.24@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89"
     TRIVY_IMAGE: "ghcr.io/aquasecurity/trivy:0.76.2"
     SYFT_IMAGE: "ghcr.io/anchore/syft:v1.57.2"
   rules:
@@ -11,8 +11,6 @@ build-scan-sbom-publish:
       variables:
         PUBLISH_IMAGE: "true"
     - if: '$CI_SERVER_PROTOCOL == "https" && $CI_COMMIT_BRANCH'
-      when: manual
-      allow_failure: true
       variables:
         PUBLISH_IMAGE: "false"
     - when: never

@@ -20,9 +20,10 @@ ROLE=frontend PORT=8080 API_URL=http://127.0.0.1:8081/message python3 apps/demo-
 curl -f http://127.0.0.1:8080/
 ```
 
-The Dockerfile requires an explicit `PYTHON_BASE_IMAGE` build argument. Use a
-trusted Python image pinned by digest for CI builds. No image is deployed by
-this local preparation step.
+The Dockerfile requires an explicit `PYTHON_BASE_IMAGE` build argument. CI uses
+the digest-pinned Python 3.12 Alpine 3.24 image in `ci/image.yml` and installs
+the patched `krb5-libs` package. Local Compose builds must use an Alpine 3.24
+base digest as well. No image is deployed by this local preparation step.
 
 For a local three-service run, set `PYTHON_BASE_IMAGE` to an approved image
 reference and run `docker compose up --build` from this directory. The frontend

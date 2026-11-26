@@ -23,6 +23,7 @@ fi
 cd "$CI_PROJECT_DIR"
 test -s reports/image-ref.txt
 test -s reports/sbom.cdx.json
+test -s ci/signing-config.json
 test -s "$COSIGN_PRIVATE_KEY"
 test -s "$COSIGN_PUBLIC_KEY"
 image_ref="$(cat reports/image-ref.txt)"
@@ -46,13 +47,16 @@ cosign_run() {
     --volume "$docker_config:/run/docker:ro" \
     --volume "$COSIGN_PRIVATE_KEY:/run/secrets/cosign.key:ro" \
     --volume "$COSIGN_PUBLIC_KEY:/run/secrets/cosign.pub:ro" \
+    --volume "$CI_PROJECT_DIR/ci/signing-config.json:/run/config/signing-config.json:ro" \
     --volume "$CI_PROJECT_DIR/reports:/reports" \
     --volume /etc/ssl/certs/ca-certificates.crt:/run/ca-bundle.crt:ro \
     "$COSIGN_IMAGE" "$@"
 }
 
-cosign_run sign --yes ----signing-config signing-config.json --key /run/secrets/cosign.key "$image_ref"
-cosign_run attest --yes --key /run/secrets/cosign.key \
+cosign_run sign --yes --signing-config /run/config/signing-config.json \
+  --key /run/secrets/cosign.key "$image_ref"
+cosign_run attest --yes --signing-config /run/config/signing-config.json \
+  --key /run/secrets/cosign.key \
   --type cyclonedx --predicate /reports/sbom.cdx.json "$image_ref"
 cosign_run verify --insecure-ignore-tlog --key /run/secrets/cosign.pub \
   "$image_ref" > reports/signature-verify.json

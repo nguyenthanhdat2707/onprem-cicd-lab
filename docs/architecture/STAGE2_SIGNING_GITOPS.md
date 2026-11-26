@@ -28,7 +28,7 @@ configure:
 Keep the private key and password out of both repositories and job logs. Use a
 dedicated lab key, record its public-key fingerprint, and retain a secure
 offline backup. For this isolated lab, the signing command disables public
-transparency-log upload; verification explicitly checks the key signature
+transparency-log upload with `ci/signing-config.json`; verification explicitly checks the key signature
 without a transparency-log proof. This verifies the key-holder but does not
 provide public timestamp or append-only audit evidence.
 

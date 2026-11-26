@@ -1,0 +1,82 @@
+---
+- name: Prepare clients for the GitLab registry hostname
+  hosts: runners:kubernetes
+  become: true
+  gather_facts: false
+  vars:
+    registry_hostname: gitlab.lab.home.arpa
+    registry_ip: 10.20.0.10
+    lab_ca_cert_local: /home/tdat/homelab-pki/lab-ca.crt
+    confirm_registry_hostname_change: false
+  tasks:
+    - name: Require operator approval at execution time
+      ansible.builtin.assert:
+        that: confirm_registry_hostname_change | bool
+        fail_msg: >-
+          Review the plan first, then pass
+          -e confirm_registry_hostname_change=true to apply it.
+
+    - name: Check current hostname resolution
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ registry_hostname }}"]
+      register: current_resolution
+      changed_when: false
+      failed_when: false
+
+    - name: Reject a hostname pointing to another server
+      ansible.builtin.assert:
+        that:
+          - >-
+            current_resolution.rc != 0 or
+            (current_resolution.stdout | regex_findall('(?m)^\\S+') | unique | list) == [registry_ip]
+        fail_msg: "{{ registry_hostname }} resolves to an unexpected address."
+
+    - name: Add a hosts entry if DNS is unavailable
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ registry_ip }} {{ registry_hostname }}"
+        state: present
+      when: current_resolution.rc != 0
+
+    - name: Install the existing lab CA in the OS trust store
+      ansible.builtin.copy:
+        src: "{{ lab_ca_cert_local }}"
+        dest: /usr/local/share/ca-certificates/homelab-root.crt
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Refresh OS certificate trust
+
+    - name: Create Docker trust directory for the new registry endpoint
+      ansible.builtin.file:
+        path: "/etc/docker/certs.d/{{ registry_hostname }}:5050"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: inventory_hostname in groups['runners']
+
+    - name: Trust the existing lab CA for Docker registry access
+      ansible.builtin.copy:
+        src: "{{ lab_ca_cert_local }}"
+        dest: "/etc/docker/certs.d/{{ registry_hostname }}:5050/ca.crt"
+        owner: root
+        group: root
+        mode: "0644"
+      when: inventory_hostname in groups['runners']
+
+    - name: Verify the hostname resolves to GitLab
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ registry_hostname }}"]
+      register: final_resolution
+      changed_when: false
+
+    - name: Verify the resolved address
+      ansible.builtin.assert:
+        that: >-
+          (final_resolution.stdout | regex_findall('(?m)^\\S+') | unique | list) == [registry_ip]
+
+  handlers:
+    - name: Refresh OS certificate trust
+      ansible.builtin.command: update-ca-certificates
+      changed_when: true

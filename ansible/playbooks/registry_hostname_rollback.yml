@@ -1,0 +1,88 @@
+---
+- name: Restore the GitLab registry endpoint from a reviewed backup
+  hosts: gitlab_servers
+  become: true
+  gather_facts: false
+  vars:
+    backup_dir: ""
+    confirm_registry_hostname_rollback: false
+  tasks:
+    - name: Require an explicit rollback request and backup path
+      ansible.builtin.assert:
+        that:
+          - confirm_registry_hostname_rollback | bool
+          - backup_dir is match('^/etc/gitlab/stage2-registry-hostname-[0-9]{8}T[0-9]{6}Z$')
+
+    - name: Check that the GitLab configuration backup exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/gitlab.rb"
+      register: backup_config
+
+    - name: Check that the certificate backup exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/gitlab.crt"
+      register: backup_cert
+
+    - name: Check that the private key backup exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/gitlab.key"
+      register: backup_key
+
+    - name: Refuse rollback if any backup file is missing
+      ansible.builtin.assert:
+        that:
+          - backup_config.stat.isreg | default(false)
+          - backup_cert.stat.isreg | default(false)
+          - backup_key.stat.isreg | default(false)
+
+    - name: Restore the original GitLab configuration
+      ansible.builtin.copy:
+        src: "{{ backup_dir }}/gitlab.rb"
+        dest: /etc/gitlab/gitlab.rb
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Restore the original server certificate
+      ansible.builtin.copy:
+        src: "{{ backup_dir }}/gitlab.crt"
+        dest: /etc/gitlab/ssl/gitlab.crt
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Restore the original server private key
+      ansible.builtin.copy:
+        src: "{{ backup_dir }}/gitlab.key"
+        dest: /etc/gitlab/ssl/gitlab.key
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Reconfigure GitLab with the restored settings
+      ansible.builtin.command: gitlab-ctl reconfigure
+      changed_when: true
+
+    - name: Verify the original GitLab HTTPS endpoint
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --cacert
+          - /etc/gitlab/trusted-certs/lab-ca.crt
+          - --silent
+          - --show-error
+          - --output
+          - /dev/null
+          - --write-out
+          - "%{http_code}"
+          - https://10.20.0.10/users/sign_in
+      register: original_gitlab_probe
+      changed_when: false
+      until: original_gitlab_probe.rc == 0 and original_gitlab_probe.stdout in ['200', '302']
+      retries: 12
+      delay: 5

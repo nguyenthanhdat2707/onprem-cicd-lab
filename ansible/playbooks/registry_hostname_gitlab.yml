@@ -1,0 +1,395 @@
+---
+- name: Migrate GitLab and registry to a hostname
+  hosts: gitlab_servers
+  become: true
+  gather_facts: false
+  vars:
+    registry_hostname: gitlab.lab.home.arpa
+    registry_ip: 10.20.0.10
+    lab_ca_cert_local: /home/tdat/homelab-pki/lab-ca.crt
+    lab_ca_key_local: /home/tdat/homelab-pki/lab-ca.key
+    gitlab_ca_cert: /etc/gitlab/trusted-certs/lab-ca.crt
+    confirm_registry_hostname_change: false
+  tasks:
+    - name: Require operator approval at execution time
+      ansible.builtin.assert:
+        that: confirm_registry_hostname_change | bool
+        fail_msg: >-
+          Review the plan first, then pass
+          -e confirm_registry_hostname_change=true to apply it.
+
+    - name: Check local CA private key permissions without reading its contents
+      ansible.builtin.stat:
+        path: "{{ lab_ca_key_local }}"
+      delegate_to: localhost
+      become: false
+      register: ca_key_stat
+
+    - name: Require the existing CA private key to remain private
+      ansible.builtin.assert:
+        that:
+          - ca_key_stat.stat.exists
+          - ca_key_stat.stat.mode == '0600'
+
+    - name: Read the local CA certificate fingerprint
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, "{{ lab_ca_cert_local }}", -noout, -fingerprint, -sha256]
+      delegate_to: localhost
+      become: false
+      register: local_ca_fingerprint
+      changed_when: false
+
+    - name: Read the GitLab CA certificate fingerprint
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, "{{ gitlab_ca_cert }}", -noout, -fingerprint, -sha256]
+      register: gitlab_ca_fingerprint
+      changed_when: false
+
+    - name: Require the local and GitLab CA certificates to match
+      ansible.builtin.assert:
+        that: local_ca_fingerprint.stdout == gitlab_ca_fingerprint.stdout
+
+    - name: Read GitLab configuration without logging its contents
+      ansible.builtin.slurp:
+        src: /etc/gitlab/gitlab.rb
+      register: gitlab_config_raw
+      no_log: true
+
+    - name: Refuse unreviewed explicit registry hostname overrides
+      ansible.builtin.assert:
+        that:
+          - >-
+            (gitlab_config_raw.content | b64decode |
+             regex_search('(?m)^[ \\t]*(?:registry\\[.token_realm.\\]|gitlab_rails\\[.registry_host.\\])[ \\t]*=')) is none
+        fail_msg: >-
+          gitlab.rb has an explicit token_realm or registry_host override.
+          Review that setting before migrating the URL.
+
+    - name: Validate the rendered GitLab configuration before active changes
+      block:
+        - name: Create a private temporary GitLab configuration path
+          ansible.builtin.tempfile:
+            state: file
+            path: /tmp
+            prefix: gitlab-rb-stage2-
+          register: gitlab_config_candidate
+
+        - name: Render candidate and check Ruby syntax
+          ansible.builtin.template:
+            src: templates/gitlab-rb-normalized.j2
+            dest: "{{ gitlab_config_candidate.path }}"
+            owner: root
+            group: root
+            mode: "0600"
+            validate: /opt/gitlab/embedded/bin/ruby -c %s
+          no_log: true
+      always:
+        - name: Remove the temporary GitLab configuration candidate
+          ansible.builtin.file:
+            path: "{{ gitlab_config_candidate.path }}"
+            state: absent
+          when: gitlab_config_candidate is defined and gitlab_config_candidate.path is defined
+
+    - name: Read SAN from the certificate currently installed on GitLab
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, /etc/gitlab/ssl/gitlab.crt, -noout, -ext, subjectAltName]
+      register: current_san
+      changed_when: false
+
+    - name: Validate the installed certificate against the existing lab CA
+      ansible.builtin.command:
+        argv: [openssl, verify, -CAfile, "{{ gitlab_ca_cert }}", /etc/gitlab/ssl/gitlab.crt]
+      register: current_cert_chain
+      changed_when: false
+      failed_when: false
+
+    - name: Decide whether the installed certificate needs replacement
+      ansible.builtin.set_fact:
+        issue_new_cert: >-
+          {{ registry_hostname not in (current_san.stdout | regex_findall('DNS:([^,\\s]+)')) or
+             registry_ip not in (current_san.stdout | regex_findall('IP Address:([^,\\s]+)')) or
+             current_cert_chain.rc != 0 }}
+
+    - name: Show the certificate decision
+      ansible.builtin.debug:
+        msg:
+          - "Installed SAN: {{ current_san.stdout_lines }}"
+          - "Issue a replacement certificate: {{ issue_new_cert }}"
+
+    - name: Check current hostname resolution on GitLab
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ registry_hostname }}"]
+      register: current_resolution
+      changed_when: false
+      failed_when: false
+
+    - name: Reject a hostname pointing to another server
+      ansible.builtin.assert:
+        that:
+          - >-
+            current_resolution.rc != 0 or
+            (current_resolution.stdout | regex_findall('(?m)^\\S+') | unique | list) == [registry_ip]
+
+    - name: Create a unique backup name
+      ansible.builtin.command:
+        argv: [date, -u, +%Y%m%dT%H%M%SZ]
+      register: backup_stamp
+      changed_when: false
+
+    - name: Create a private GitLab backup directory
+      ansible.builtin.file:
+        path: "/etc/gitlab/stage2-registry-hostname-{{ backup_stamp.stdout }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Back up the active GitLab configuration
+      ansible.builtin.copy:
+        src: /etc/gitlab/gitlab.rb
+        dest: "/etc/gitlab/stage2-registry-hostname-{{ backup_stamp.stdout }}/gitlab.rb"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Back up the active server certificate
+      ansible.builtin.copy:
+        src: /etc/gitlab/ssl/gitlab.crt
+        dest: "/etc/gitlab/stage2-registry-hostname-{{ backup_stamp.stdout }}/gitlab.crt"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Back up the active server private key
+      ansible.builtin.copy:
+        src: /etc/gitlab/ssl/gitlab.key
+        dest: "/etc/gitlab/stage2-registry-hostname-{{ backup_stamp.stdout }}/gitlab.key"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Show the rollback directory before changing GitLab
+      ansible.builtin.debug:
+        msg: "Backup: /etc/gitlab/stage2-registry-hostname-{{ backup_stamp.stdout }}"
+
+    - name: Issue a replacement only when the installed SAN is incomplete
+      when: issue_new_cert | bool
+      block:
+        - name: Create a private certificate staging directory on the controller
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: gitlab-stage2
+          delegate_to: localhost
+          become: false
+          register: certificate_stage
+
+        - name: Write the required server certificate extensions
+          ansible.builtin.copy:
+            dest: "{{ certificate_stage.path }}/server.ext"
+            content: |
+              subjectAltName=DNS:gitlab.lab.home.arpa,IP:10.20.0.10
+              basicConstraints=critical,CA:FALSE
+              keyUsage=critical,digitalSignature,keyEncipherment
+              extendedKeyUsage=serverAuth
+            mode: "0600"
+          delegate_to: localhost
+          become: false
+
+        - name: Generate a new server key and CSR locally
+          ansible.builtin.command:
+            argv:
+              - openssl
+              - req
+              - -new
+              - -newkey
+              - rsa:3072
+              - -nodes
+              - -keyout
+              - "{{ certificate_stage.path }}/gitlab.key"
+              - -out
+              - "{{ certificate_stage.path }}/gitlab.csr"
+              - -subj
+              - "/CN={{ registry_hostname }}"
+          delegate_to: localhost
+          become: false
+          changed_when: true
+          no_log: true
+
+        - name: Restrict the generated server key
+          ansible.builtin.file:
+            path: "{{ certificate_stage.path }}/gitlab.key"
+            mode: "0600"
+          delegate_to: localhost
+          become: false
+
+        - name: Generate a random certificate serial
+          ansible.builtin.command:
+            argv: [openssl, rand, -hex, "16"]
+          delegate_to: localhost
+          become: false
+          register: certificate_serial
+          changed_when: false
+
+        - name: Prompt privately for the local lab CA key passphrase
+          ansible.builtin.pause:
+            prompt: Passphrase for /home/tdat/homelab-pki/lab-ca.key
+            echo: false
+          register: ca_passphrase_prompt
+          no_log: true
+
+        - name: Sign the server CSR with the existing local lab CA
+          ansible.builtin.command:
+            argv:
+              - openssl
+              - x509
+              - -req
+              - -in
+              - "{{ certificate_stage.path }}/gitlab.csr"
+              - -CA
+              - "{{ lab_ca_cert_local }}"
+              - -CAkey
+              - "{{ lab_ca_key_local }}"
+              - -passin
+              - fd:0
+              - -set_serial
+              - "0x{{ certificate_serial.stdout }}"
+              - -days
+              - "365"
+              - -sha256
+              - -extfile
+              - "{{ certificate_stage.path }}/server.ext"
+              - -out
+              - "{{ certificate_stage.path }}/gitlab.crt"
+            stdin: "{{ ca_passphrase_prompt.user_input }}"
+            stdin_add_newline: true
+          delegate_to: localhost
+          become: false
+          changed_when: true
+          no_log: true
+
+        - name: Validate the new certificate against the existing CA
+          ansible.builtin.command:
+            argv: [openssl, verify, -CAfile, "{{ lab_ca_cert_local }}", "{{ certificate_stage.path }}/gitlab.crt"]
+          delegate_to: localhost
+          become: false
+          changed_when: false
+
+        - name: Validate the DNS SAN on the new certificate
+          ansible.builtin.command:
+            argv: [openssl, x509, -in, "{{ certificate_stage.path }}/gitlab.crt", -noout, -checkhost, "{{ registry_hostname }}"]
+          delegate_to: localhost
+          become: false
+          changed_when: false
+
+        - name: Validate the retained IP SAN on the new certificate
+          ansible.builtin.command:
+            argv: [openssl, x509, -in, "{{ certificate_stage.path }}/gitlab.crt", -noout, -checkip, "{{ registry_ip }}"]
+          delegate_to: localhost
+          become: false
+          changed_when: false
+
+        - name: Install the new server certificate on GitLab
+          ansible.builtin.copy:
+            src: "{{ certificate_stage.path }}/gitlab.crt"
+            dest: /etc/gitlab/ssl/gitlab.crt
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Install the new server private key on GitLab
+          ansible.builtin.copy:
+            src: "{{ certificate_stage.path }}/gitlab.key"
+            dest: /etc/gitlab/ssl/gitlab.key
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+      always:
+        - name: Forget the CA passphrase from play variables
+          ansible.builtin.set_fact:
+            ca_passphrase_prompt: {}
+          no_log: true
+          when: ca_passphrase_prompt is defined
+
+        - name: Remove the temporary local server private key and CSR
+          ansible.builtin.file:
+            path: "{{ certificate_stage.path }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when: certificate_stage is defined and certificate_stage.path is defined
+
+    - name: Add a hosts entry on GitLab if DNS is unavailable
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ registry_ip }} {{ registry_hostname }}"
+        state: present
+      when: current_resolution.rc != 0
+      register: hostname_hosts_entry
+
+    - name: Write a single active GitLab URL and registry URL
+      ansible.builtin.template:
+        src: templates/gitlab-rb-normalized.j2
+        dest: /etc/gitlab/gitlab.rb
+        owner: root
+        group: root
+        mode: "0600"
+        validate: /opt/gitlab/embedded/bin/ruby -c %s
+      register: gitlab_config_write
+      no_log: true
+
+    - name: Reconfigure GitLab once after the hostname and TLS change
+      ansible.builtin.command: gitlab-ctl reconfigure
+      when: gitlab_config_write.changed or hostname_hosts_entry.changed or issue_new_cert | bool
+      changed_when: true
+
+    - name: Wait for the HTTPS GitLab sign-in page
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --cacert
+          - "{{ gitlab_ca_cert }}"
+          - --silent
+          - --show-error
+          - --output
+          - /dev/null
+          - --write-out
+          - "%{http_code}"
+          - "https://{{ registry_hostname }}/users/sign_in"
+      register: gitlab_probe
+      changed_when: false
+      until: gitlab_probe.rc == 0 and gitlab_probe.stdout in ['200', '302']
+      retries: 12
+      delay: 5
+
+    - name: Read the registry authentication challenge over validated TLS
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --cacert
+          - "{{ gitlab_ca_cert }}"
+          - --silent
+          - --show-error
+          - --dump-header
+          - "-"
+          - --output
+          - /dev/null
+          - "https://{{ registry_hostname }}:5050/v2/"
+      register: registry_probe
+      changed_when: false
+      until: registry_probe.rc == 0 and '401' in registry_probe.stdout
+      retries: 12
+      delay: 5
+
+    - name: Require the registry bearer realm to use the hostname
+      ansible.builtin.assert:
+        that: "'realm=\"https://' ~ registry_hostname ~ '/jwt/auth\"' in registry_probe.stdout"
+
+    - name: Show the retained rollback directory
+      ansible.builtin.debug:
+        msg: "Backup: /etc/gitlab/stage2-registry-hostname-{{ backup_stamp.stdout }}"

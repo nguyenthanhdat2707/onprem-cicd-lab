@@ -1,0 +1,105 @@
+---
+- name: Inspect lab hostname reachability without changing hosts
+  hosts: all
+  gather_facts: false
+  vars:
+    lab_registry_hostname: gitlab.lab.home.arpa
+  tasks:
+    - name: Check whether the proposed hostname already resolves
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ lab_registry_hostname }}"]
+      register: hostname_resolution
+      changed_when: false
+      failed_when: false
+
+    - name: Show hostname resolution status
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ hostname_resolution.stdout_lines | first
+             if hostname_resolution.rc == 0 else 'not resolved' }}
+
+    - name: Check for an existing hosts-file mapping
+      ansible.builtin.command:
+        argv: [grep, -F, "{{ lab_registry_hostname }}", /etc/hosts]
+      register: hosts_mapping
+      changed_when: false
+      failed_when: false
+
+    - name: Show hosts-file mapping status
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ hosts_mapping.stdout_lines | first
+             if hosts_mapping.rc == 0 else 'no hosts-file entry' }}
+
+- name: Inspect GitLab TLS and registry configuration
+  hosts: gitlab_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Show only GitLab URL and certificate path settings
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import re
+            from pathlib import Path
+
+            patterns = [
+                r"^\s*(external_url|registry_external_url)\s+['\"]([^'\"]+)['\"]",
+                r"^\s*((?:nginx|registry_nginx)\['ssl_certificate(?:_key)?'\])\s*=\s*['\"]([^'\"]+)['\"]",
+                r"^\s*(registry\['token_realm'\])\s*=\s*['\"]([^'\"]+)['\"]",
+            ]
+            for line in Path("/etc/gitlab/gitlab.rb").read_text().splitlines():
+                if line.lstrip().startswith("#"):
+                    continue
+                for pattern in patterns:
+                    match = re.match(pattern, line)
+                    if match:
+                        print(match.group(1) + "=" + match.group(2))
+      register: gitlab_urls
+      changed_when: false
+
+    - name: Show filtered GitLab settings
+      ansible.builtin.debug:
+        var: gitlab_urls.stdout_lines
+
+    - name: List certificate and CA key candidate paths without reading contents
+      ansible.builtin.command:
+        argv:
+          - find
+          - /etc/gitlab
+          - /home/gitlab
+          - -maxdepth
+          - "4"
+          - -type
+          - f
+          - "("
+          - -name
+          - "*.crt"
+          - -o
+          - -name
+          - "*.pem"
+          - -o
+          - -name
+          - "*.key"
+          - ")"
+          - -print
+      register: certificate_paths
+      changed_when: false
+
+    - name: Show candidate paths only
+      ansible.builtin.debug:
+        var: certificate_paths.stdout_lines
+
+    - name: Inspect free space before changing GitLab
+      ansible.builtin.command:
+        argv: [df, -h, /etc/gitlab, /var/opt/gitlab]
+      register: gitlab_space
+      changed_when: false
+
+    - name: Show free space
+      ansible.builtin.debug:
+        var: gitlab_space.stdout_lines

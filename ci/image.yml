@@ -13,7 +13,6 @@ build-scan-sbom-publish:
     - if: '$CI_SERVER_PROTOCOL == "https" && $CI_COMMIT_BRANCH'
       variables:
         PUBLISH_IMAGE: "false"
-        CI_IMAGE_SCAN_JOURNAL: "1"
     - when: never
   script:
     - bash ci/build-image.sh

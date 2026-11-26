@@ -47,12 +47,6 @@ def main() -> int:
         lines.append(f"additional_findings={len(findings) - 20}")
     for line in lines:
         print(line, flush=True)
-    if os.environ.get("CI_IMAGE_SCAN_JOURNAL") == "1":
-        import syslog
-
-        syslog.openlog(ident="cicd-image-scan")
-        for line in lines:
-            syslog.syslog(syslog.LOG_INFO, line)
     return 0
 
 

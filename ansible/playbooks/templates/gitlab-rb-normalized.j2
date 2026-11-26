@@ -1,0 +1,4 @@
+{{ (gitlab_config_raw.content | b64decode | regex_replace('(?m)^[ \t]*(?:external_url|registry_external_url)[ \t]+[^\r\n]*(?:\r?\n|$)', '') | trim) }}
+
+external_url 'https://{{ registry_hostname }}'
+registry_external_url 'https://{{ registry_hostname }}:5050'

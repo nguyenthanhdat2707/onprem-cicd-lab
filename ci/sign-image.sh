@@ -32,6 +32,14 @@ if [[ ! "$image_ref" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ || "$image_ref" != "
   exit 1
 fi
 
+# Cosign runs in its own Docker container, which does not inherit the runner's
+# /etc/hosts entry or the Docker executor's extra_hosts setting.
+registry_host="${CI_REGISTRY%%:*}"
+if ! registry_ip="$(getent ahostsv4 "$registry_host" | awk '$2 == "STREAM" { print $1; exit }')" || [[ -z "$registry_ip" ]]; then
+  echo "Cannot resolve registry hostname on the runner: $registry_host" >&2
+  exit 1
+fi
+
 docker_config="$(mktemp -d)"
 chmod 700 "$docker_config"
 cleanup() { rm -rf -- "$docker_config"; }
@@ -42,7 +50,8 @@ docker pull "$COSIGN_IMAGE" >/dev/null
 
 cosign_run() {
   docker run --rm --user "$(id -u):$(id -g)" \
-    --env COSIGN_PASSWORD --env DOCKER_CONFIG=/run/docker \
+    --add-host "$registry_host:$registry_ip" \
+    --env COSIGN_PASSWORD --env DOCKER_CONFIG=/run/docker --env HOME=/tmp \
     --env SSL_CERT_FILE=/run/ca-bundle.crt \
     --volume "$docker_config:/run/docker:ro" \
     --volume "$COSIGN_PRIVATE_KEY:/run/secrets/cosign.key:ro" \

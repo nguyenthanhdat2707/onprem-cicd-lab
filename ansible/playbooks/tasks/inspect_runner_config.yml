@@ -1,0 +1,13 @@
+---
+- name: Read only runner names, executors and Docker host mappings
+  ansible.builtin.script: "{{ playbook_dir }}/files/runner_config_summary.py /etc/gitlab-runner/config.toml"
+  register: runner_config_summary
+  changed_when: false
+
+- name: Parse the sanitized runner summary
+  ansible.builtin.set_fact:
+    runner_config_state: "{{ runner_config_summary.stdout | from_json }}"
+
+- name: Show sanitized runner configuration
+  ansible.builtin.debug:
+    var: runner_config_state

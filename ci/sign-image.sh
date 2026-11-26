@@ -51,7 +51,7 @@ cosign_run() {
     "$COSIGN_IMAGE" "$@"
 }
 
-cosign_run sign --yes --tlog-upload=false --key /run/secrets/cosign.key "$image_ref"
+cosign_run sign --yes ----signing-config signing-config.json --key /run/secrets/cosign.key "$image_ref"
 cosign_run attest --yes --key /run/secrets/cosign.key \
   --type cyclonedx --predicate /reports/sbom.cdx.json "$image_ref"
 cosign_run verify --insecure-ignore-tlog --key /run/secrets/cosign.pub \

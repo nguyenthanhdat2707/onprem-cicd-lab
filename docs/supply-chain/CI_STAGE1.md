@@ -3,8 +3,8 @@
 The source pipeline is configured to run the demo app unit test on runner tag
 `network-lab`, then a Trivy 0.76.2 secret scan on runner tag `homelab`.
 The Docker and shell runner diagnostics remain optional manual jobs.
-The user reported a successful pipeline run after enabling HTTPS and runner
-access. The exact job logs and commit of that run have not yet been inspected.
+Runner logs confirmed that pipeline 40 ran jobs 134 and 137 successfully after
+HTTPS and runner access were enabled. The image job has not yet been observed.
 With `CI_SERVER_PROTOCOL=https`, the secret scan runs automatically and fails
 the pipeline on findings.
 
@@ -20,8 +20,8 @@ The image job builds the demo app from a digest-pinned Python base image,
 blocks on HIGH/CRITICAL image vulnerabilities with Trivy 0.76.2, and writes a
 CycloneDX JSON SBOM with Syft v1.57.2. It uses the `network-lab` shell runner
 and its Docker daemon, avoiding a second privileged Docker daemon. On feature
-branches it is manual and stops before registry login or push. On the default
-branch it runs automatically after the test and secret-scan stages, then pushes
+branches it runs automatically but stops before registry login or push. On the
+default branch it runs automatically after the test and secret-scan stages, then pushes
 a commit-SHA/job-ID tag to the project registry. The pushed digest is saved
 as `reports/image-ref.txt`. `reports/image-evidence.txt` links that digest to
 the commit, pipeline, local image ID, scan report hash and SBOM hash. Reports

@@ -11,8 +11,6 @@ build-scan-sbom-publish:
       variables:
         PUBLISH_IMAGE: "true"
     - if: '$CI_SERVER_PROTOCOL == "https" && $CI_COMMIT_BRANCH'
-      when: manual
-      allow_failure: true
       variables:
         PUBLISH_IMAGE: "false"
     - when: never

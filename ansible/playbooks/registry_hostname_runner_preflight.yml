@@ -1,0 +1,18 @@
+---
+- name: Inspect Docker runner hostname configuration without changing it
+  hosts: runners
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Inspect the runner configuration without printing tokens
+      ansible.builtin.import_tasks: tasks/inspect_runner_config.yml
+
+    - name: Check the runner service state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, gitlab-runner]
+      register: runner_service_state
+      changed_when: false
+
+    - name: Show the runner service state
+      ansible.builtin.debug:
+        var: runner_service_state.stdout

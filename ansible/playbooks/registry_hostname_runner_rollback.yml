@@ -1,0 +1,47 @@
+---
+- name: Restore the runner configuration from a reviewed backup
+  hosts: runners
+  become: true
+  gather_facts: false
+  vars:
+    backup_file: ""
+    confirm_runner_hostname_rollback: false
+  tasks:
+    - name: Require an explicit rollback request and backup path
+      ansible.builtin.assert:
+        that:
+          - confirm_runner_hostname_rollback | bool
+          - backup_file is match('^/etc/gitlab-runner/config[.]toml[.]stage2-[0-9]{8}T[0-9]{6}Z$')
+
+    - name: Check that the runner backup exists
+      ansible.builtin.stat:
+        path: "{{ backup_file }}"
+      register: runner_backup
+
+    - name: Refuse rollback without a regular backup file
+      ansible.builtin.assert:
+        that: runner_backup.stat.isreg | default(false)
+
+    - name: Restore the runner configuration after TOML validation
+      ansible.builtin.copy:
+        src: "{{ backup_file }}"
+        dest: /etc/gitlab-runner/config.toml
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+        validate: >-
+          /usr/bin/python3 -c 'import sys,tomllib;
+          tomllib.load(open(sys.argv[1],"rb"))' %s
+      no_log: true
+
+    - name: Allow GitLab Runner to reload the restored configuration
+      ansible.builtin.pause:
+        seconds: 4
+
+    - name: Require the runner service to stay active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, gitlab-runner]
+      register: runner_service_state
+      changed_when: false
+      failed_when: runner_service_state.rc != 0 or runner_service_state.stdout != 'active'

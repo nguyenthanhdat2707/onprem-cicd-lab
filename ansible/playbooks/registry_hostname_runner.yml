@@ -1,0 +1,121 @@
+---
+- name: Add the GitLab hostname to Docker executor containers
+  hosts: runners
+  become: true
+  gather_facts: false
+  vars:
+    runner_hostname_mapping: gitlab.lab.home.arpa:10.20.0.10
+    confirm_runner_hostname_change: false
+  tasks:
+    - name: Require operator approval at execution time
+      ansible.builtin.assert:
+        that: confirm_runner_hostname_change | bool
+
+    - name: Inspect the runner configuration without printing tokens
+      ansible.builtin.import_tasks: tasks/inspect_runner_config.yml
+
+    - name: Select the Docker runner
+      ansible.builtin.set_fact:
+        docker_runners: >-
+          {{ runner_config_state.runners |
+             selectattr('executor', 'equalto', 'docker') | list }}
+
+    - name: Require exactly one Docker runner section
+      ansible.builtin.assert:
+        that:
+          - docker_runners | length == 1
+          - runner_config_state.docker_section_count == 1
+          - runner_config_state.extra_hosts_sections | difference(['runners.docker']) | length == 0
+        fail_msg: >-
+          The runner configuration differs from the expected single Docker
+          runner. Review the sanitized preflight output before editing it.
+
+    - name: Read existing Docker container host mappings
+      ansible.builtin.set_fact:
+        existing_extra_hosts: "{{ docker_runners[0].extra_hosts }}"
+
+    - name: Refuse a conflicting GitLab hostname mapping
+      ansible.builtin.assert:
+        that:
+          - existing_extra_hosts is sequence
+          - existing_extra_hosts is not string
+          - >-
+            (existing_extra_hosts |
+             select('match', '^gitlab[.]lab[.]home[.]arpa:') | list |
+             difference([runner_hostname_mapping])) | length == 0
+        fail_msg: >-
+          Docker runner already has a different GitLab hostname mapping.
+          Review it before applying this change.
+
+    - name: Build the Docker host mapping list without dropping existing entries
+      ansible.builtin.set_fact:
+        desired_extra_hosts: >-
+          {{ existing_extra_hosts +
+             ([runner_hostname_mapping]
+              if runner_hostname_mapping not in existing_extra_hosts else []) }}
+
+    - name: Create a unique backup name when a change is needed
+      ansible.builtin.command:
+        argv: [date, -u, +%Y%m%dT%H%M%SZ]
+      register: backup_stamp
+      changed_when: false
+      when: runner_hostname_mapping not in existing_extra_hosts
+
+    - name: Back up the runner configuration with its registration tokens
+      ansible.builtin.copy:
+        src: /etc/gitlab-runner/config.toml
+        dest: "/etc/gitlab-runner/config.toml.stage2-{{ backup_stamp.stdout }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when: runner_hostname_mapping not in existing_extra_hosts
+
+    - name: Show the private backup path
+      ansible.builtin.debug:
+        msg: "Backup: /etc/gitlab-runner/config.toml.stage2-{{ backup_stamp.stdout }}"
+      when: runner_hostname_mapping not in existing_extra_hosts
+
+    - name: Add the hostname only to the Docker runner configuration
+      ansible.builtin.lineinfile:
+        path: /etc/gitlab-runner/config.toml
+        regexp: '^[ \t]*extra_hosts[ \t]*='
+        insertafter: '^[ \t]*\[runners\.docker\][ \t]*$'
+        line: "    extra_hosts = {{ desired_extra_hosts | to_json }}"
+        owner: root
+        group: root
+        mode: "0600"
+        validate: >-
+          /usr/bin/python3 -c 'import sys,tomllib;
+          tomllib.load(open(sys.argv[1],"rb"))' %s
+      register: runner_config_write
+      no_log: true
+      when: runner_hostname_mapping not in existing_extra_hosts
+      notify: Allow GitLab Runner to reload the changed configuration
+
+    - name: Wait for any pending runner configuration reload
+      ansible.builtin.meta: flush_handlers
+
+    - name: Inspect the runner configuration after the change
+      ansible.builtin.import_tasks: tasks/inspect_runner_config.yml
+
+    - name: Require the Docker runner to contain the new hostname mapping
+      ansible.builtin.assert:
+        that: >-
+          runner_hostname_mapping in
+          (runner_config_state.runners |
+           selectattr('executor', 'equalto', 'docker') | map(attribute='extra_hosts') |
+           first)
+
+    - name: Require the runner service to stay active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, gitlab-runner]
+      register: runner_service_state
+      changed_when: false
+      failed_when: runner_service_state.rc != 0 or runner_service_state.stdout != 'active'
+
+  handlers:
+    - name: Allow GitLab Runner to reload the changed configuration
+      ansible.builtin.pause:
+        seconds: 4

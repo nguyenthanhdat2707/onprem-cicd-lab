@@ -46,11 +46,21 @@ docker build --pull \
   --tag "$image_tag" apps/demo-app
 
 docker pull "$TRIVY_IMAGE" >/dev/null
+scan_status=0
 docker run --rm \
   --volume /var/run/docker.sock:/var/run/docker.sock \
   --env TRIVY_NO_PROGRESS=true \
   "$TRIVY_IMAGE" image --scanners vuln --severity HIGH,CRITICAL \
-  --exit-code 1 --format json "$image_tag" > reports/image-scan.json
+  --exit-code 1 --format json "$image_tag" > reports/image-scan.json || scan_status=$?
+if [[ ! -s reports/image-scan.json ]]; then
+  echo "Trivy did not produce an image scan report" >&2
+  exit 1
+fi
+python3 ci/image-scan-summary.py reports/image-scan.json
+if [[ "$scan_status" -ne 0 ]]; then
+  echo "Trivy blocked the image (exit code $scan_status)" >&2
+  exit "$scan_status"
+fi
 
 docker pull "$SYFT_IMAGE" >/dev/null
 docker run --rm \
